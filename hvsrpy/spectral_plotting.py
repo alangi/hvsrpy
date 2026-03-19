@@ -20,8 +20,13 @@
 The low-level primitive in this module is :func:`plot_spectrum_component`,
 which draws one selected component onto a supplied axis. Notebook code
 can use that function directly to assemble 2x2 grids or other custom
-subplot layouts, while the existing wrapper functions remain available
-for backward-compatible convenience.
+subplot layouts.
+
+For higher-level plotting, use :func:`plot_spectrum_results` for
+multi-axis detailed views and :func:`plot_spectrum_summary` or
+:func:`plot_spectra` for single-axis summary views. ``SpectralResult``
+already carries ``spectrum_type``, so separate FAS/PSD-specific plotting
+wrappers are not needed.
 """
 
 import numpy as np
@@ -33,8 +38,6 @@ __all__ = [
     "plot_spectrum_results",
     "plot_spectrum_summary",
     "plot_spectra",
-    "plot_fourier_amplitude_spectra",
-    "plot_power_spectral_density",
 ]
 
 
@@ -277,41 +280,15 @@ def plot_spectra(spectra,
                  include_horizontal=False,
                  statistic="median",
                  ax=None):
-    """Plot summary component spectra for either FAS or PSD."""
+    """Plot summary component spectra for either FAS or PSD.
+
+    ``SpectralResult`` usually already carries the spectral quantity, so
+    ``spectrum_type`` is typically inferred from ``spectra``.
+    """
     spectra = as_spectral_result(spectra, spectrum_type=spectrum_type)
     return plot_spectrum_summary(
         spectra,
         spectrum_type=spectra.spectrum_type,
-        include_horizontal=include_horizontal,
-        statistic=statistic,
-        ax=ax,
-    )
-
-
-def plot_fourier_amplitude_spectra(spectra,
-                                   include_horizontal=False,
-                                   statistic="median",
-                                   ax=None):
-    """Backward-compatible wrapper for plotting Fourier spectra."""
-    spectra = as_spectral_result(spectra, spectrum_type="fas")
-    return plot_spectra(
-        spectra,
-        spectrum_type="fas",
-        include_horizontal=include_horizontal,
-        statistic=statistic,
-        ax=ax,
-    )
-
-
-def plot_power_spectral_density(spectra,
-                                include_horizontal=False,
-                                statistic="median",
-                                ax=None):
-    """Backward-compatible wrapper for plotting power spectral density."""
-    spectra = as_spectral_result(spectra, spectrum_type="psd")
-    return plot_spectra(
-        spectra,
-        spectrum_type="psd",
         include_horizontal=include_horizontal,
         statistic=statistic,
         ax=ax,
