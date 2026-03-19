@@ -57,6 +57,7 @@ __all__ = [
     "plot_spectrum_summary",
     "plot_spectra",
     "plot_fourier_amplitude_spectra",
+    "plot_power_spectral_density",
 ]
 
 
@@ -423,6 +424,7 @@ def smooth_fourier_amplitude_spectra(spectra, settings):
 
 from .spectral_plotting import (  # noqa: E402
     plot_fourier_amplitude_spectra,
+    plot_power_spectral_density,
     plot_spectra,
     plot_spectrum_component,
     plot_spectrum_results,

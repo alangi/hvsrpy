@@ -34,6 +34,7 @@ __all__ = [
     "plot_spectrum_summary",
     "plot_spectra",
     "plot_fourier_amplitude_spectra",
+    "plot_power_spectral_density",
 ]
 
 
@@ -296,6 +297,21 @@ def plot_fourier_amplitude_spectra(spectra,
     return plot_spectra(
         spectra,
         spectrum_type="fas",
+        include_horizontal=include_horizontal,
+        statistic=statistic,
+        ax=ax,
+    )
+
+
+def plot_power_spectral_density(spectra,
+                                include_horizontal=False,
+                                statistic="median",
+                                ax=None):
+    """Backward-compatible wrapper for plotting power spectral density."""
+    spectra = as_spectral_result(spectra, spectrum_type="psd")
+    return plot_spectra(
+        spectra,
+        spectrum_type="psd",
         include_horizontal=include_horizontal,
         statistic=statistic,
         ax=ax,

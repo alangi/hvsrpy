@@ -36,6 +36,7 @@ from hvsrpy.spectral_amplitude import (
     plot_spectrum_component,
     plot_spectra,
     plot_fourier_amplitude_spectra,
+    plot_power_spectral_density,
 )
 from testing_tools import unittest, TestCase
 
@@ -70,6 +71,7 @@ class TestSpectralAmplitude(TestCase):
         self.assertTrue(hasattr(module, "plot_spectrum_summary"))
         self.assertTrue(hasattr(module, "plot_spectra"))
         self.assertTrue(hasattr(module, "plot_fourier_amplitude_spectra"))
+        self.assertTrue(hasattr(module, "plot_power_spectral_density"))
 
     def test_plotting_module_imports(self):
         module = importlib.import_module("hvsrpy.spectral_plotting")
@@ -78,6 +80,7 @@ class TestSpectralAmplitude(TestCase):
         self.assertTrue(hasattr(module, "plot_spectrum_summary"))
         self.assertTrue(hasattr(module, "plot_spectra"))
         self.assertTrue(hasattr(module, "plot_fourier_amplitude_spectra"))
+        self.assertTrue(hasattr(module, "plot_power_spectral_density"))
 
     def test_spectral_result_dataclass_normalizes_shapes(self):
         result = SpectralResult(
@@ -370,6 +373,26 @@ class TestSpectralAmplitude(TestCase):
         fig, ax = plot_fourier_amplitude_spectra(spectra, include_horizontal=True)
         self.assertEqual(len(ax.get_lines()), 4)
         plt.close(fig)
+
+    def test_plot_power_spectral_density(self):
+        spectra = compute_power_spectral_density(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        fig, ax = plot_power_spectral_density(spectra, include_horizontal=True)
+        self.assertEqual(len(ax.get_lines()), 4)
+        self.assertEqual(ax.get_ylabel(), "Power Spectral Density")
+        plt.close(fig)
+
+    def test_plot_power_spectral_density_wrong_type_raises(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            plot_power_spectral_density(spectra, include_horizontal=True)
 
     def test_plot_spectrum_results_for_fas(self):
         spectra = compute_fourier_amplitude_spectra(
