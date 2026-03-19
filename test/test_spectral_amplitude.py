@@ -26,12 +26,14 @@ import matplotlib.pyplot as plt
 
 import hvsrpy
 from hvsrpy.spectral_amplitude import (
+    SpectralResult,
     compute_fourier_amplitude_spectra,
     compute_power_spectral_density,
     smooth_fourier_amplitude_spectra,
     smooth_spectra,
     plot_spectrum_results,
     plot_spectrum_summary,
+    plot_spectrum_component,
     plot_spectra,
     plot_fourier_amplitude_spectra,
 )
@@ -61,11 +63,39 @@ class TestSpectralAmplitude(TestCase):
         module = importlib.import_module("hvsrpy.spectral_amplitude")
         self.assertTrue(hasattr(module, "compute_fourier_amplitude_spectra"))
         self.assertTrue(hasattr(module, "compute_power_spectral_density"))
+        self.assertTrue(hasattr(module, "SpectralResult"))
         self.assertTrue(hasattr(module, "smooth_fourier_amplitude_spectra"))
+        self.assertTrue(hasattr(module, "plot_spectrum_component"))
         self.assertTrue(hasattr(module, "plot_spectrum_results"))
         self.assertTrue(hasattr(module, "plot_spectrum_summary"))
         self.assertTrue(hasattr(module, "plot_spectra"))
         self.assertTrue(hasattr(module, "plot_fourier_amplitude_spectra"))
+
+    def test_plotting_module_imports(self):
+        module = importlib.import_module("hvsrpy.spectral_plotting")
+        self.assertTrue(hasattr(module, "plot_spectrum_component"))
+        self.assertTrue(hasattr(module, "plot_spectrum_results"))
+        self.assertTrue(hasattr(module, "plot_spectrum_summary"))
+        self.assertTrue(hasattr(module, "plot_spectra"))
+        self.assertTrue(hasattr(module, "plot_fourier_amplitude_spectra"))
+
+    def test_spectral_result_dataclass_normalizes_shapes(self):
+        result = SpectralResult(
+            frequency=np.array([1.0, 2.0, 3.0]),
+            ns=np.array([1.0, 2.0, 3.0]),
+            ew=np.array([2.0, 3.0, 4.0]),
+            vt=np.array([3.0, 4.0, 5.0]),
+            spectrum_type="fas",
+            is_smoothed=False,
+        )
+
+        self.assertEqual(result.ns.shape, (1, 3))
+        self.assertEqual(result.ew.shape, (1, 3))
+        self.assertFalse(result.has_horizontal)
+        self.assertEqual(result.n_records, 1)
+        self.assertEqual(result.n_frequencies, 3)
+        self.assertTrue("frequency" in result)
+        self.assertEqual(result["spectrum_type"], "fas")
 
     def test_compute_fourier_amplitude_spectra(self):
         spectra = compute_fourier_amplitude_spectra(
@@ -73,7 +103,10 @@ class TestSpectralAmplitude(TestCase):
             self.settings,
             include_horizontal=True,
         )
+        self.assertIsInstance(spectra, SpectralResult)
         self.assertTrue("frequency" in spectra)
+        self.assertEqual(spectra.spectrum_type, "fas")
+        self.assertFalse(spectra.is_smoothed)
         self.assertEqual(spectra["ns"].shape[0], len(self.records))
         self.assertEqual(spectra["ew"].shape, spectra["ns"].shape)
         self.assertEqual(spectra["vt"].shape, spectra["ns"].shape)
@@ -135,6 +168,9 @@ class TestSpectralAmplitude(TestCase):
         )
         smoothed = smooth_fourier_amplitude_spectra(spectra, settings=self.settings)
 
+        self.assertIsInstance(smoothed, SpectralResult)
+        self.assertEqual(smoothed.spectrum_type, "fas")
+        self.assertTrue(smoothed.is_smoothed)
         self.assertArrayAlmostEqual(
             smoothed["frequency"],
             self.settings.smoothing["center_frequencies_in_hz"],
@@ -219,7 +255,9 @@ class TestSpectralAmplitude(TestCase):
             include_horizontal=True,
         )
 
+        self.assertIsInstance(spectra, SpectralResult)
         self.assertTrue("frequency" in spectra)
+        self.assertEqual(spectra.spectrum_type, "psd")
         self.assertEqual(spectra["ns"].shape[0], len(self.records))
         self.assertEqual(spectra["ew"].shape, spectra["ns"].shape)
         self.assertEqual(spectra["vt"].shape, spectra["ns"].shape)
@@ -258,11 +296,70 @@ class TestSpectralAmplitude(TestCase):
         )
         smoothed = smooth_spectra(spectra, settings=self.settings)
 
+        self.assertIsInstance(smoothed, SpectralResult)
+        self.assertEqual(smoothed.spectrum_type, "psd")
+        self.assertTrue(smoothed.is_smoothed)
         self.assertArrayAlmostEqual(
             smoothed["frequency"],
             self.settings.smoothing["center_frequencies_in_hz"],
         )
         self.assertEqual(smoothed["ns"].shape, (len(self.records), 32))
+
+    def test_smooth_spectra_accepts_legacy_dict_input(self):
+        spectra = compute_power_spectral_density(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        self.settings.smoothing = dict(
+            operator="konno_and_ohmachi",
+            bandwidth=40,
+            center_frequencies_in_hz=np.geomspace(0.2, 20, 16),
+        )
+
+        legacy = spectra.as_dict()
+        smoothed = smooth_spectra(legacy, settings=self.settings)
+
+        self.assertIsInstance(smoothed, SpectralResult)
+        self.assertEqual(smoothed["horizontal"].shape, (len(self.records), 16))
+
+    def test_plot_spectrum_component_on_provided_axis(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        fig, ax = plt.subplots()
+        returned = plot_spectrum_component(
+            spectra,
+            component="horizontal",
+            ax=ax,
+            title="Horizontal",
+        )
+        self.assertIs(returned, ax)
+        self.assertEqual(len(ax.get_lines()), len(self.records) + 1)
+        self.assertEqual(ax.get_ylabel(), "Fourier Amplitude")
+        self.assertEqual(ax.get_title(), "Horizontal")
+        plt.close(fig)
+
+    def test_plot_spectrum_component_can_be_composed_across_axes(self):
+        spectra = compute_power_spectral_density(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        fig, axes = plt.subplots(2, 2)
+        components = ["ns", "ew", "vt", "horizontal"]
+        for ax, component in zip(axes.flat, components):
+            plot_spectrum_component(
+                spectra,
+                component=component,
+                ax=ax,
+                title=component.upper(),
+            )
+        self.assertEqual(axes[0, 0].get_title(), "NS")
+        self.assertEqual(axes[1, 1].get_ylabel(), "Power Spectral Density")
+        plt.close(fig)
 
     def test_plot_fourier_amplitude_spectra(self):
         spectra = compute_fourier_amplitude_spectra(
@@ -288,6 +385,19 @@ class TestSpectralAmplitude(TestCase):
         self.assertEqual(len(axes), 4)
         self.assertEqual(axes[0].get_ylabel(), "Fourier Amplitude")
         self.assertEqual(axes[-1].get_xlabel(), "Frequency (Hz)")
+        plt.close(fig)
+
+    def test_plot_spectrum_results_infers_type_from_dataclass(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        fig, axes = plot_spectrum_results(
+            spectra,
+            include_horizontal=True,
+        )
+        self.assertEqual(axes[0].get_ylabel(), "Fourier Amplitude")
         plt.close(fig)
 
     def test_plot_spectrum_results_for_psd(self):
@@ -332,6 +442,20 @@ class TestSpectralAmplitude(TestCase):
         )
         self.assertEqual(len(ax.get_lines()), 4)
         self.assertEqual(ax.get_ylabel(), "Fourier Amplitude")
+        plt.close(fig)
+
+    def test_plot_spectrum_summary_accepts_legacy_dict_input(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        fig, ax = plot_spectrum_summary(
+            spectra.as_dict(),
+            spectrum_type="fas",
+            include_horizontal=True,
+        )
+        self.assertEqual(len(ax.get_lines()), 4)
         plt.close(fig)
 
     def test_plot_spectrum_summary_without_horizontal(self):

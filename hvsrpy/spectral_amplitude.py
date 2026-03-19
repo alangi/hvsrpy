@@ -15,7 +15,7 @@
 #     You should have received a copy of the GNU General Public License
 #     along with this program.  If not, see <https: //www.gnu.org/licenses/>.
 
-"""Helpers for spectral-analysis workflows on accepted 3-component records.
+"""Spectral compute helpers for already-accepted 3-component records.
 
 This module computes spectra from the same 3-component records used in
 the HVSR workflow, but it intentionally remains separate from the main
@@ -24,68 +24,35 @@ already split into windows, and already filtered down to the accepted
 windows that should be analyzed. No detrending, filtering, windowing,
 rejection, or other preprocessing is performed here.
 
-Two spectral quantities are supported:
+The preferred return type is :class:`SpectralResult`, a small
+notebook-friendly dataclass that stores one spectral dataset, including
+its frequency vector, component arrays, and lightweight metadata such as
+the spectral quantity type and whether smoothing has already been
+applied.
 
-``fas``
-    Fourier amplitude spectrum. This module preserves the existing
-    ``abs(rfft(...))`` convention already used here.
-``psd``
-    One-sided power spectral density computed from the already-windowed
-    inputs. The normalization mirrors the package's PSD processing
-    convention where practical by using ``2 * |FFT|^2 / (n_samples *
-    fs)`` per record/window, but this module does not apply any extra
-    tapering or window-energy correction because the inputs are assumed
-    to have already passed through that stage upstream.
-
-The unsmoothed frequency vector is built directly from the FFT bins
-defined by the selected FFT length and the shared sampling interval. If
-spectra are smoothed, the returned frequency vector becomes
-``settings.smoothing["center_frequencies_in_hz"]``. The current
-horizontal-combination behavior is preserved for non-azimuth methods.
-For ``single_azimuth``, the horizontal trace follows the existing HVSR
-methodology: rotate the two horizontal components in the time domain
-using the requested azimuth, then transform that rotated component.
-
-The functions in this module use only a small subset of the processing
-settings object:
-
-``settings.fft_settings``
-    Passed through to :func:`numpy.fft.rfft` after resolving a shared
-    ``n`` value.
-``settings.method_to_combine_horizontals``
-    Used only when ``include_horizontal=True``.
-``settings.smoothing``
-    Used only when smoothing is requested. Expected keys are
-    ``operator``, ``bandwidth``, and ``center_frequencies_in_hz``.
-
-Examples
---------
->>> import numpy as np
->>> from hvsrpy.timeseries import TimeSeries
->>> from hvsrpy.seismic_recording_3c import SeismicRecording3C
->>> from hvsrpy.spectral_amplitude import compute_fourier_amplitude_spectra
->>> t = np.arange(0, 10, 0.01)
->>> ns = TimeSeries(np.sin(2*np.pi*2*t), 0.01)
->>> ew = TimeSeries(np.sin(2*np.pi*2*t), 0.01)
->>> vt = TimeSeries(np.sin(2*np.pi*2*t), 0.01)
->>> record = SeismicRecording3C(ns, ew, vt)
->>> from hvsrpy.settings import HvsrTraditionalProcessingSettings
->>> settings = HvsrTraditionalProcessingSettings()
->>> fas = compute_fourier_amplitude_spectra([record], settings)
->>> "frequency" in fas and "ns" in fas and "vt" in fas
-True
+Public plotting entry points remain available from this module for
+backward compatibility, but plotting lives in
+``hvsrpy.spectral_plotting``.
 """
 
 import numpy as np
 from numpy.fft import rfft
 
+from ._spectral import (
+    SPECTRUM_TYPES,
+    SpectralResult,
+    as_spectral_result,
+    validate_spectrum_type,
+)
 from .smoothing import SMOOTHING_OPERATORS
 
 __all__ = [
+    "SpectralResult",
     "compute_fourier_amplitude_spectra",
     "compute_power_spectral_density",
     "smooth_fourier_amplitude_spectra",
     "smooth_spectra",
+    "plot_spectrum_component",
     "plot_spectrum_results",
     "plot_spectrum_summary",
     "plot_spectra",
@@ -93,19 +60,8 @@ __all__ = [
 ]
 
 
-_SPECTRUM_TYPES = {
-    "fas": "Fourier Amplitude",
-    "psd": "Power Spectral Density",
-}
-
-
 def _nextpow2(n, minimum_power_of_two=2**15):
-    """Return the first power of two above ``n``.
-
-    The implementation intentionally mirrors the package's existing FFT
-    sizing style, including the minimum power-of-two floor used to keep
-    FFT sizes consistent for downstream smoothing workflows.
-    """
+    """Return the first power of two above ``n``."""
     power_of_two = minimum_power_of_two
     while True:
         if power_of_two > n:
@@ -122,12 +78,7 @@ def _check_nyquist_frequency(fnyq, frequencies):
 
 
 def _validate_component(component, record_index, component_name):
-    """Validate the minimal interface required for one component.
-
-    This module intentionally accepts duck-typed record objects, but it
-    still checks for the small set of attributes required to compute FAS
-    so callers get a clear error instead of a later ``AttributeError``.
-    """
+    """Validate the minimal interface required for one component."""
     missing_attrs = [
         attr for attr in ("amplitude", "dt_in_seconds", "n_samples")
         if not hasattr(component, attr)
@@ -156,12 +107,7 @@ def _validate_record_structure(record, record_index):
 
 
 def _validate_records_and_resolve_dt(records):
-    """Validate record structure and enforce a single sampling interval.
-
-    The FAS helpers in this module return one shared frequency vector, so
-    all components within a record and all records across the input
-    iterable must share the same ``dt_in_seconds`` value.
-    """
+    """Validate record structure and enforce a single sampling interval."""
     shared_dt = None
     for record_index, record in enumerate(records):
         _validate_record_structure(record, record_index)
@@ -193,15 +139,7 @@ def _validate_records_and_resolve_dt(records):
 
 
 def _resolve_fft_settings(records, fft_settings):
-    """Resolve FFT settings while preserving the package's current policy.
-
-    A shared FFT length is required because the returned spectra use one
-    common frequency vector for all records. The effective ``n`` is based
-    on the longest component among all ``ns``, ``ew``, and ``vt`` traces,
-    then promoted to the next allowed power-of-two size following the
-    existing package convention.
-    """
-
+    """Resolve FFT settings while preserving the current policy."""
     max_n_samples = 0
     for record in records:
         for component_name in ("ns", "ew", "vt"):
@@ -223,24 +161,8 @@ def _resolve_fft_settings(records, fft_settings):
     return fft_settings
 
 
-def _validate_spectrum_type(spectrum_type):
-    """Validate and normalize the requested spectrum type."""
-    if spectrum_type not in _SPECTRUM_TYPES:
-        msg = (
-            f"spectrum_type={spectrum_type!r} not recognized. "
-            "Use 'fas' or 'psd'."
-        )
-        raise ValueError(msg)
-    return spectrum_type
-
-
 def _combine_horizontals(spectrum_ns, spectrum_ew, method):
-    """Combine horizontal spectra using the configured non-azimuth method.
-
-    This helper intentionally preserves the existing combination logic
-    used by this module. It does not attempt to align the behavior with
-    other package pathways beyond what is already implemented here.
-    """
+    """Combine horizontal spectra using the configured non-azimuth method."""
     if method == "arithmetic_mean":
         return (spectrum_ns + spectrum_ew) / 2
     if method in ("squared_average", "quadratic_mean", "root_mean_square", "effective_amplitude_spectrum"):
@@ -267,13 +189,7 @@ def _method_to_combine_horizontals(settings):
 
 
 def _azimuth_in_degrees(settings):
-    """Resolve and validate the azimuth used by ``single_azimuth``.
-
-    The value is interpreted the same way as the existing HVSR
-    implementation: degrees from north, clockwise positive. No explicit
-    wrapping is required because the trigonometric evaluation is
-    periodic, but the value must be finite.
-    """
+    """Resolve and validate the azimuth used by ``single_azimuth``."""
     if not hasattr(settings, "azimuth_in_degrees"):
         msg = (
             "settings.azimuth_in_degrees is required when "
@@ -295,12 +211,7 @@ def _azimuth_in_degrees(settings):
 
 
 def _single_azimuth_horizontal_amplitude(record, settings):
-    """Rotate the horizontal components in the time domain.
-
-    This mirrors the existing HVSR single-azimuth methodology in
-    :mod:`hvsrpy.processing`: ``ns*cos(theta) + ew*sin(theta)`` with
-    ``theta`` measured in degrees clockwise from north.
-    """
+    """Rotate the horizontal components in the time domain."""
     azimuth_in_degrees = _azimuth_in_degrees(settings)
     radians_from_north = np.radians(azimuth_in_degrees)
     return (
@@ -342,13 +253,7 @@ def _compute_single_azimuth_psd(record, settings, fft_settings):
 
 
 def _compute_horizontal_spectra(ns, ew, records, settings, fft_settings, spectrum_type):
-    """Compute the optional horizontal spectra according to settings.
-
-    For non-azimuth methods the combination is applied directly to the
-    selected spectral quantity. For ``single_azimuth`` the horizontal
-    component is formed in the time domain first, matching the HVSR
-    implementation, then transformed into the selected spectral quantity.
-    """
+    """Compute the optional horizontal spectra according to settings."""
     method_to_combine_horizontals = _method_to_combine_horizontals(settings)
     horizontal = np.empty_like(ns)
     if method_to_combine_horizontals == "single_azimuth":
@@ -366,7 +271,7 @@ def _compute_horizontal_spectra(ns, ew, records, settings, fft_settings, spectru
 
 def _compute_spectra(records, settings, spectrum_type, include_horizontal=False, smooth=False):
     """Compute either FAS or PSD for already-accepted 3C records."""
-    _validate_spectrum_type(spectrum_type)
+    validate_spectrum_type(spectrum_type)
     if settings is None:
         raise ValueError("settings is required.")
 
@@ -375,7 +280,10 @@ def _compute_spectra(records, settings, spectrum_type, include_horizontal=False,
         raise ValueError("records must contain at least one SeismicRecording3C.")
 
     dt = _validate_records_and_resolve_dt(records)
-    fft_settings = _resolve_fft_settings(records, fft_settings=getattr(settings, "fft_settings", None))
+    fft_settings = _resolve_fft_settings(
+        records,
+        fft_settings=getattr(settings, "fft_settings", None),
+    )
     n = fft_settings["n"]
     frequency = np.fft.rfftfreq(n, dt)
     ns = np.empty((len(records), len(frequency)))
@@ -388,11 +296,18 @@ def _compute_spectra(records, settings, spectrum_type, include_horizontal=False,
         ew[idx] = component_operator(record.ew, fft_settings)
         vt[idx] = component_operator(record.vt, fft_settings)
 
-    result = dict(frequency=frequency, ns=ns, ew=ew, vt=vt)
-    if include_horizontal:
-        result["horizontal"] = _compute_horizontal_spectra(
-            ns, ew, records, settings, fft_settings, spectrum_type
-        )
+    result = SpectralResult(
+        frequency=frequency,
+        ns=ns,
+        ew=ew,
+        vt=vt,
+        horizontal=(
+            _compute_horizontal_spectra(ns, ew, records, settings, fft_settings, spectrum_type)
+            if include_horizontal else None
+        ),
+        spectrum_type=spectrum_type,
+        is_smoothed=False,
+    )
 
     if smooth:
         return smooth_spectra(result, settings)
@@ -404,50 +319,12 @@ def compute_fourier_amplitude_spectra(records,
                                       settings,
                                       include_horizontal=False,
                                       smooth=False):
-    """Compute Fourier amplitude spectra from already-accepted windows.
+    """Compute Fourier amplitude spectra from accepted windows.
 
-    Parameters
-    ----------
-    records : iterable of SeismicRecording3C
-        3-component traces that are already preprocessed/windowed and
-        already represent accepted windows for analysis. This function
-        assumes each record exposes ``ns``, ``ew``, and ``vt`` and that
-        each component exposes ``amplitude``, ``dt_in_seconds``, and
-        ``n_samples``.
-    settings : HvsrTraditionalProcessingSettings-like
-        Source of FFT and optional smoothing conventions. Only relevant
-        fields are used: ``fft_settings``, ``method_to_combine_horizontals``,
-        and ``smoothing``. No other processing settings are consumed by
-        this module.
-    include_horizontal : bool, optional
-        If ``True``, include ``horizontal`` in the returned dictionary
-        using the current in-module combination behavior.
-    smooth : bool, optional
-        If ``True``, return spectra smoothed using
-        :func:`smooth_fourier_amplitude_spectra` and
-        ``settings.smoothing``.
-
-    Returns
-    -------
-    dict
-        Dictionary with keys ``frequency``, ``ns``, ``ew``, ``vt``, and
-        optionally ``horizontal``.
-
-        ``frequency`` is shape ``(n_frequencies,)``.
-        ``ns``, ``ew``, ``vt``, and optional ``horizontal`` are shape
-        ``(n_records, n_frequencies)``.
-
-        When ``smooth=False``, ``frequency`` is the FFT frequency vector
-        from :func:`numpy.fft.rfftfreq`. When ``smooth=True``, the result
-        is passed through :func:`smooth_fourier_amplitude_spectra`, so
-        ``frequency`` becomes
-        ``settings.smoothing["center_frequencies_in_hz"]``.
-
-    Notes
-    -----
-    This function does not apply additional preprocessing, tapering, or
-    acceptance checks. It computes FFT magnitudes directly from the
-    amplitudes already present on each component.
+    Inputs are assumed to already be preprocessed, already windowed, and
+    already accepted for analysis. This function performs no additional
+    preprocessing or rejection checks and returns a
+    :class:`SpectralResult`.
     """
     return _compute_spectra(
         records,
@@ -462,39 +339,12 @@ def compute_power_spectral_density(records,
                                    settings,
                                    include_horizontal=False,
                                    smooth=False):
-    """Compute one-sided PSD curves from already-accepted windows.
+    """Compute one-sided PSD curves from accepted windows.
 
-    Parameters
-    ----------
-    records : iterable of SeismicRecording3C
-        Already-preprocessed, already-windowed, already-accepted
-        3-component records.
-    settings : Settings-like
-        Source of FFT, horizontal-combination, azimuth, and optional
-        smoothing information. Only the fields needed by this module are
-        accessed.
-    include_horizontal : bool, optional
-        If ``True``, include an optional ``horizontal`` entry.
-        ``single_azimuth`` is handled by rotating the horizontal traces
-        in the time domain before the PSD is formed.
-    smooth : bool, optional
-        If ``True``, smooth the PSD curves using ``settings.smoothing``.
-
-    Returns
-    -------
-    dict
-        Dictionary with the same structure as
-        :func:`compute_fourier_amplitude_spectra`: ``frequency``, ``ns``,
-        ``ew``, ``vt``, and optional ``horizontal``. Component arrays
-        are shape ``(n_records, n_frequencies)``.
-
-    Notes
-    -----
-    The PSD normalization in this module is ``2 * |FFT|^2 / (n_samples *
-    fs)`` for each record/window. This follows the package's PSD
-    processing convention in broad form, but no additional tapering or
-    window-energy normalization is applied here because the inputs are
-    assumed to already be windowed upstream.
+    Inputs are assumed to already be preprocessed, already windowed, and
+    already accepted for analysis. This function performs no additional
+    preprocessing or rejection checks and returns a
+    :class:`SpectralResult`.
     """
     return _compute_spectra(
         records,
@@ -506,33 +356,27 @@ def compute_power_spectral_density(records,
 
 
 def smooth_spectra(spectra, settings):
-    """Smooth previously computed spectra of any supported quantity.
+    """Smooth a previously computed spectral dataset.
 
     Parameters
     ----------
-    spectra : dict
-        Dictionary with entries from one of the compute helpers in this
-        module. The function expects a ``frequency`` entry plus one or
-        more component arrays whose first dimension indexes
-        records/windows.
+    spectra : SpectralResult or dict-like
+        Output from one of the compute helpers in this module. Dict-like
+        input is still accepted for backward compatibility, but the
+        preferred return and input type is
+        :class:`SpectralResult`.
     settings : Settings-like
-        Provides smoothing dictionary with keys ``operator``,
+        Provides the smoothing dictionary with keys ``operator``,
         ``bandwidth``, and ``center_frequencies_in_hz``.
 
     Returns
     -------
-    dict
-        Smoothed spectra with the same keys as input and updated
-        ``frequency`` vector. The output ``frequency`` array is exactly
-        ``settings.smoothing["center_frequencies_in_hz"]``.
-
-    Notes
-    -----
-    This function only changes the sampling of the spectra along the
-    frequency axis. It does not alter the component set, amplitude
-    convention, or horizontal-combination logic established before
-    smoothing.
+    SpectralResult
+        Smoothed copy of ``spectra`` with
+        ``frequency=settings.smoothing["center_frequencies_in_hz"]`` and
+        ``is_smoothed=True``.
     """
+    spectra = as_spectral_result(spectra)
     smoothing = getattr(settings, "smoothing", None)
     if smoothing is None:
         msg = "settings.smoothing is required for spectral smoothing."
@@ -542,283 +386,45 @@ def smooth_spectra(spectra, settings):
     bandwidth = smoothing["bandwidth"]
     fcs = np.array(smoothing["center_frequencies_in_hz"], dtype=float)
 
-    frequency = np.array(spectra["frequency"], dtype=float)
-    # Same Nyquist guard style used by HVSR processing.
+    frequency = np.array(spectra.frequency, dtype=float)
     _check_nyquist_frequency(np.max(frequency), fcs)
     if operator not in SMOOTHING_OPERATORS:
         msg = f"Smoothing operator {operator!r} is not recognized."
         raise ValueError(msg)
 
-    result = dict(frequency=fcs)
-    for key, value in spectra.items():
-        if key == "frequency":
+    smoothed_components = {}
+    for key in ("ns", "ew", "vt", "horizontal"):
+        values = getattr(spectra, key)
+        if values is None:
             continue
-        value = np.array(value, dtype=float)
-        if value.ndim == 1:
-            value = np.atleast_2d(value)
-        result[key] = SMOOTHING_OPERATORS[operator](frequency, value, fcs, bandwidth)
+        smoothed_components[key] = SMOOTHING_OPERATORS[operator](
+            frequency,
+            np.asarray(values, dtype=float),
+            fcs,
+            bandwidth,
+        )
 
-    return result
+    return SpectralResult(
+        frequency=fcs,
+        ns=smoothed_components["ns"],
+        ew=smoothed_components["ew"],
+        vt=smoothed_components["vt"],
+        horizontal=smoothed_components.get("horizontal", None),
+        spectrum_type=spectra.spectrum_type,
+        is_smoothed=True,
+    )
 
 
-def smooth_fourier_amplitude_spectra(spectra,
-                                     settings):
-    """Backward-compatible wrapper for smoothing FAS dictionaries."""
+def smooth_fourier_amplitude_spectra(spectra, settings):
+    """Backward-compatible wrapper for smoothing Fourier spectra."""
+    spectra = as_spectral_result(spectra, spectrum_type="fas")
     return smooth_spectra(spectra, settings)
 
 
-def _summary_statistic(values, statistic):
-    """Reduce a 2D array of spectra across records/windows."""
-    if statistic == "mean":
-        return np.mean(values, axis=0)
-    if statistic == "median":
-        return np.median(values, axis=0)
-    msg = f"statistic={statistic} not recognized. Use 'mean' or 'median'."
-    raise ValueError(msg)
-
-
-def _components_to_plot(spectra, include_horizontal=False):
-    """Return the ordered set of component keys and display labels."""
-    components = [("ns", "North"), ("ew", "East"), ("vt", "Vertical")]
-    if include_horizontal and ("horizontal" in spectra):
-        components.append(("horizontal", "Horizontal"))
-    return components
-
-
-def _prepare_component_values(spectra, key):
-    """Return one component's spectra as a 2D floating-point array."""
-    values = np.array(spectra[key], dtype=float)
-    if values.ndim == 1:
-        values = np.atleast_2d(values)
-    return values
-
-
-def _configure_spectrum_axis(ax, spectrum_type, ylabel=None, xlabel=False):
-    """Apply common axis formatting for spectral plots."""
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    if ylabel is not None:
-        ax.set_ylabel(ylabel)
-    if xlabel:
-        ax.set_xlabel("Frequency (Hz)")
-    else:
-        ax.set_xlabel("")
-    ax.set_xmargin(0)
-
-
-def _valid_plot_mask(frequency, values):
-    """Return a mask suitable for positive log-log spectral plotting."""
-    return (
-        np.isfinite(frequency)
-        & (frequency > 0)
-        & np.isfinite(values)
-        & (values > 0)
-    )
-
-
-def plot_spectrum_results(spectra,
-                          spectrum_type,
-                          include_horizontal=False,
-                          statistic="median",
-                          axes=None):
-    """Plot detailed spectral results with one subplot per component.
-
-    This plot is intended for quality control and detailed inspection.
-    Each subplot shows one component only. All accepted windows are drawn
-    faintly, and the selected summary statistic is overlaid as a heavier
-    summary curve.
-
-    Parameters
-    ----------
-    spectra : dict
-        Spectra dictionary produced by one of this module's compute
-        helpers.
-    spectrum_type : {"fas", "psd"}
-        Determines the y-axis label.
-    include_horizontal : bool, optional
-        If ``True`` and ``horizontal`` is present in ``spectra``, an
-        additional horizontal subplot is included.
-    statistic : {"median", "mean"}, optional
-        Summary statistic to overlay on top of the individual windows.
-    axes : iterable of matplotlib.axes.Axes, optional
-        Existing axes to use. If provided, the number of axes must match
-        the number of plotted components.
-
-    Returns
-    -------
-    tuple
-        ``(fig, axes)`` if new axes are created. Otherwise returns the
-        provided axes as a NumPy array.
-    """
-    import matplotlib.pyplot as plt
-
-    spectrum_type = _validate_spectrum_type(spectrum_type)
-    components = _components_to_plot(spectra, include_horizontal=include_horizontal)
-    frequency = np.array(spectra["frequency"], dtype=float)
-
-    axes_were_provided = axes is not None
-    if axes is None:
-        fig, axes = plt.subplots(
-            len(components),
-            1,
-            sharex=True,
-            figsize=(5.0, 1.9*len(components) + 0.4),
-            dpi=150,
-        )
-    axes = np.atleast_1d(axes)
-    if len(axes) != len(components):
-        msg = (
-            f"Expected {len(components)} axes for the requested components, "
-            f"received {len(axes)}."
-        )
-        raise ValueError(msg)
-
-    ylabel = _SPECTRUM_TYPES[spectrum_type]
-    for ax, (key, label) in zip(axes, components):
-        values = _prepare_component_values(spectra, key)
-        for row in values:
-            valid = _valid_plot_mask(frequency, row)
-            ax.plot(
-                frequency[valid],
-                row[valid],
-                color="0.65",
-                linewidth=0.8,
-                alpha=0.35,
-            )
-        summary = _summary_statistic(values, statistic=statistic)
-        valid = _valid_plot_mask(frequency, summary)
-        ax.plot(
-            frequency[valid],
-            summary[valid],
-            color="C0",
-            linewidth=1.6,
-        )
-        _configure_spectrum_axis(ax, spectrum_type, ylabel=ylabel, xlabel=False)
-        ax.set_title(label)
-
-    _configure_spectrum_axis(axes[-1], spectrum_type, ylabel=ylabel, xlabel=True)
-
-    if axes_were_provided:
-        return axes
-    return fig, axes
-
-
-def plot_spectrum_summary(spectra,
-                          spectrum_type,
-                          include_horizontal=False,
-                          statistic="median",
-                          ax=None):
-    """Plot summary spectral curves for all requested components.
-
-    This plot is intended as a compact spectral overview. Only the
-    summary curve for each component is plotted. Individual windows are
-    not shown.
-
-    Parameters
-    ----------
-    spectra : dict
-        Spectra dictionary produced by one of this module's compute
-        helpers.
-    spectrum_type : {"fas", "psd"}
-        Determines the y-axis label.
-    include_horizontal : bool, optional
-        If ``True`` and ``horizontal`` is present in ``spectra``, the
-        derived horizontal component is included.
-    statistic : {"median", "mean"}, optional
-        Summary statistic used for each component.
-    ax : matplotlib.axes.Axes, optional
-        Existing axes.
-
-    Returns
-    -------
-    tuple
-        ``(fig, ax)`` if ``ax`` is ``None`` otherwise ``ax``.
-    """
-    import matplotlib.pyplot as plt
-
-    spectrum_type = _validate_spectrum_type(spectrum_type)
-    ax_was_none = ax is None
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(4.0, 2.8), dpi=150)
-
-    frequency = np.array(spectra["frequency"], dtype=float)
-    label_map = [("ns", "N"), ("ew", "E"), ("vt", "Z")]
-    if include_horizontal and ("horizontal" in spectra):
-        label_map.append(("horizontal", "H"))
-
-    for key, label in label_map:
-        values = _prepare_component_values(spectra, key)
-        reduced = _summary_statistic(values, statistic=statistic)
-        valid = _valid_plot_mask(frequency, reduced)
-        ax.plot(frequency[valid], reduced[valid], label=label)
-
-    _configure_spectrum_axis(
-        ax,
-        spectrum_type,
-        ylabel=_SPECTRUM_TYPES[spectrum_type],
-        xlabel=True,
-    )
-    ax.legend(loc="best")
-
-    if ax_was_none:
-        return fig, ax
-    return ax
-
-
-def plot_spectra(spectra,
-                 spectrum_type,
-                 include_horizontal=False,
-                 statistic="median",
-                 ax=None):
-    """Plot summary component spectra for either FAS or PSD.
-
-    Parameters
-    ----------
-    spectra : dict
-        Spectra dictionary from one of the compute helpers in this
-        module.
-    spectrum_type : {"fas", "psd"}
-        Selects the y-axis label and validates the intended quantity to
-        plot.
-    include_horizontal : bool, optional
-        If ``True`` and ``horizontal`` exists in ``spectra``, it is
-        included in the plot.
-    statistic : {"median", "mean"}, optional
-        Reduction over windows for each component.
-    ax : matplotlib.axes.Axes, optional
-        Existing axes.
-
-    Returns
-    -------
-    tuple
-        ``(fig, ax)`` if ``ax`` is ``None`` otherwise ``ax``.
-
-    Notes
-    -----
-    This is the compact single-axis summary plot. It summarizes multiple
-    windows per component using either the median or mean before
-    plotting. Individual windows are not shown. For a per-component QC
-    view with faint individual windows, use
-    :func:`plot_spectrum_results`.
-    """
-    return plot_spectrum_summary(
-        spectra,
-        spectrum_type=spectrum_type,
-        include_horizontal=include_horizontal,
-        statistic=statistic,
-        ax=ax,
-    )
-
-
-def plot_fourier_amplitude_spectra(spectra,
-                                   include_horizontal=False,
-                                   statistic="median",
-                                   ax=None):
-    """Backward-compatible wrapper for plotting Fourier amplitude spectra."""
-    return plot_spectra(
-        spectra,
-        spectrum_type="fas",
-        include_horizontal=include_horizontal,
-        statistic=statistic,
-        ax=ax,
-    )
+from .spectral_plotting import (  # noqa: E402
+    plot_fourier_amplitude_spectra,
+    plot_spectra,
+    plot_spectrum_component,
+    plot_spectrum_results,
+    plot_spectrum_summary,
+)
