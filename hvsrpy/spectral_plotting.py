@@ -166,8 +166,6 @@ def plot_spectrum_component(spectra,
         ylabel=SPECTRUM_TYPES[spectra.spectrum_type] if show_ylabel else None,
         xlabel=show_xlabel,
     )
-    if not show_ylabel:
-        ax.set_ylabel("")
     if title is not None:
         ax.set_title(title)
 
@@ -198,6 +196,12 @@ def plot_spectrum_results(spectra,
         Summary statistic to overlay on top of the individual windows.
     axes : iterable of matplotlib.axes.Axes, optional
         Existing axes to use.
+
+    Returns
+    -------
+    tuple or numpy.ndarray
+        Returns ``(fig, axes)`` when ``axes`` is ``None``; otherwise
+        returns the provided axes array.
     """
     import matplotlib.pyplot as plt
 
@@ -243,7 +247,14 @@ def plot_spectrum_summary(spectra,
                           include_horizontal=False,
                           statistic="median",
                           ax=None):
-    """Plot summary spectral curves for all requested components."""
+    """Plot summary spectral curves for all requested components.
+
+    Returns
+    -------
+    tuple or matplotlib.axes.Axes
+        Returns ``(fig, ax)`` when ``ax`` is ``None``; otherwise returns
+        ``ax``.
+    """
     import matplotlib.pyplot as plt
 
     spectra = as_spectral_result(spectra, spectrum_type=spectrum_type)

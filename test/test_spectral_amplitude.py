@@ -362,6 +362,24 @@ class TestSpectralAmplitude(TestCase):
         self.assertEqual(axes[1, 1].get_ylabel(), "Power Spectral Density")
         plt.close(fig)
 
+    def test_plot_spectrum_component_invalid_component(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=True,
+        )
+        with self.assertRaisesRegex(ValueError, "Use 'ns', 'ew', 'vt', or 'horizontal'"):
+            plot_spectrum_component(spectra, component="bad_component")
+
+    def test_plot_spectrum_component_missing_horizontal_raises(self):
+        spectra = compute_fourier_amplitude_spectra(
+            self.records,
+            self.settings,
+            include_horizontal=False,
+        )
+        with self.assertRaisesRegex(ValueError, "horizontal is not present"):
+            plot_spectrum_component(spectra, component="horizontal")
+
     def test_plot_spectrum_results_for_fas(self):
         spectra = compute_fourier_amplitude_spectra(
             self.records,

@@ -168,7 +168,7 @@ class SpectralResult:
 
 
 def as_spectral_result(spectra, spectrum_type=None, is_smoothed=None):
-    """Normalize dict-like or dataclass spectra into ``SpectralResult``."""
+    """Normalize ``SpectralResult`` or dict-like input into ``SpectralResult``."""
     if spectrum_type is not None:
         spectrum_type = validate_spectrum_type(spectrum_type)
 

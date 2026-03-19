@@ -30,8 +30,8 @@ its frequency vector, component arrays, and lightweight metadata such as
 the spectral quantity type and whether smoothing has already been
 applied.
 
-Public plotting entry points remain available from this module for
-backward compatibility, but plotting lives in
+Public plotting entry points are re-exported from this module for API
+convenience, but the plotting implementations live in
 ``hvsrpy.spectral_plotting``.
 """
 
@@ -39,7 +39,6 @@ import numpy as np
 from numpy.fft import rfft
 
 from ._spectral import (
-    SPECTRUM_TYPES,
     SpectralResult,
     as_spectral_result,
     validate_spectrum_type,
