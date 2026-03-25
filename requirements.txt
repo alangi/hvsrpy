@@ -8,6 +8,7 @@ matplotlib
 click>8.0.0
 numba
 scikit-learn
+xgboost
 tox
 jupyterlab
 coverage

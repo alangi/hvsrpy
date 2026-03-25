@@ -3,6 +3,7 @@
 *.pyc
 *.tmp_profiler_run
 .vscode
+hvsrweb.py
 html
 /examples/data/example_mhvsr_io.csv
 /examples/data/preprocess.json

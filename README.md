@@ -131,6 +131,32 @@ frequency-domain window-rejection algorithm by Cox et al. (2020).
 criteria.
 -   A command line interface (CLI) for parallel batch-style processing
 using multiprocessing.
+-   Optional AutoHVSR post-processing for candidate-peak extraction,
+resonance grouping, and structured multi-resonance summaries.
+
+### AutoHVSR
+
+AutoHVSR is available as an optional second-stage library workflow over
+an already-processed HVSR object:
+
+```python
+import hvsrpy
+
+hvsr = hvsrpy.process(records, settings)
+autohvsr = hvsrpy.process_autohvsr(hvsr)
+print(autohvsr.resonances)
+```
+
+Supported classifier modes are `"heuristic"`, `"xgboost"`, and `"auto"`.
+The default remains `"heuristic"` because no bundled AutoHVSR model
+artifact is shipped with the package. The XGBoost path is supported and
+looks first for a user-supplied `classifier_model_path`, then for the
+package resource `hvsrpy.models/2_xgboost_peak_classifier.json` when
+bundled-model lookup is enabled. Because that bundled model is not
+currently present in this repo, a compatible model file still has to be
+supplied explicitly for XGBoost today. In `"auto"` mode, `hvsrpy` tries
+the XGBoost path first and falls back to the heuristic classifier with a
+warning if no usable model is available.
 
 ### Example output from `hvsrpy` when considering the geometric-mean of the horizontal components
 

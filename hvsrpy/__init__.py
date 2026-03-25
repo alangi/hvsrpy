@@ -30,6 +30,18 @@ from .seismic_recording_3c import SeismicRecording3C
 from .timeseries import TimeSeries
 from .preprocessing import preprocess
 from .processing import process, rpsd
+from .autohvsr import (
+    AutoHvsrPeak,
+    AutoHvsrResonance,
+    AutoHvsrResult,
+    AutoHvsrSettings,
+    build_autohvsr_features,
+    classify_autohvsr_candidates,
+    cluster_autohvsr_resonances,
+    extract_autohvsr_candidates,
+    process_autohvsr,
+    summarize_autohvsr_resonances,
+)
 from .settings import *
 from .window_rejection import sta_lta_window_rejection, maximum_value_window_rejection, frequency_domain_window_rejection, manual_window_rejection
 from .object_io import *

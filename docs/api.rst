@@ -14,5 +14,6 @@ order they would be used in a HVSR processing workflow.
    time_series_objects
    hvsr_processing_overview
    hvsr_objects
+   autohvsr
    window_rejection
    spatial
